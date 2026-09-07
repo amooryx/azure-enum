@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="./banner.svg" alt="azure-enum" width="800">
+</div>
+
 # azure-enum
 
 > Red team security tool — authorized use only.
