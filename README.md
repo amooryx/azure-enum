@@ -1,8 +1,8 @@
-﻿# azure-enum
+# azure-enum
 
 > Red team security tool — authorized use only.
 
-`ash
+```bash
 python azure_enum.py --help
 ```
 
