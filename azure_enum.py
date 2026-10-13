@@ -20,6 +20,8 @@ except ImportError:
     HAS_MSAL = False
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+GRAPH_HOST = "graph.microsoft.com"
+MAX_GRAPH_PAGES = 20
 
 def get_token_password(tenant_id: str, client_id: str, username: str, password: str) -> str | None:
     if not HAS_MSAL:
@@ -46,7 +48,17 @@ def get_token_device(tenant_id: str, client_id: str) -> str | None:
     return result.get("access_token")
 
 def graph_get(endpoint: str, token: str) -> dict | list:
-    url = f"{GRAPH_BASE}/{endpoint}"
+    parsed = urllib.parse.urlsplit(endpoint)
+    if parsed.scheme or parsed.netloc:
+        if (parsed.scheme != "https" or parsed.hostname != GRAPH_HOST
+                or parsed.port not in (None, 443) or parsed.username or parsed.password
+                or not parsed.path.startswith("/v1.0/") or parsed.fragment):
+            raise ValueError("Microsoft Graph returned an unsafe continuation URL")
+        url = endpoint
+    else:
+        if endpoint.startswith(("/", "\\")) or "\\" in endpoint:
+            raise ValueError("Microsoft Graph endpoint must be relative")
+        url = f"{GRAPH_BASE}/{endpoint}"
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Content-Type",  "application/json")
@@ -56,21 +68,40 @@ def graph_get(endpoint: str, token: str) -> dict | list:
     except Exception as e:
         return {"error": str(e)}
 
+def graph_get_all(endpoint: str, token: str) -> list[dict]:
+    results = []
+    for page_number in range(MAX_GRAPH_PAGES):
+        data = graph_get(endpoint, token)
+        if not isinstance(data, dict) or "error" in data:
+            raise RuntimeError("Microsoft Graph inventory request failed")
+        page = data.get("value")
+        if not isinstance(page, list):
+            raise RuntimeError("Microsoft Graph returned an invalid inventory page")
+        results.extend(page)
+
+        next_link = data.get("@odata.nextLink")
+        if next_link is None:
+            return results
+        if not isinstance(next_link, str) or not next_link:
+            raise RuntimeError("Microsoft Graph returned an invalid continuation link")
+        if page_number + 1 == MAX_GRAPH_PAGES:
+            raise RuntimeError(
+                f"Microsoft Graph inventory exceeded the {MAX_GRAPH_PAGES}-page safety limit"
+            )
+        endpoint = next_link
+    return results
+
 def list_users(token: str) -> list[dict]:
-    data = graph_get("users?$select=id,displayName,userPrincipalName,jobTitle,department,accountEnabled&$top=999", token)
-    return data.get("value", [])
+    return graph_get_all("users?$select=id,displayName,userPrincipalName,jobTitle,department,accountEnabled&$top=999", token)
 
 def list_groups(token: str) -> list[dict]:
-    data = graph_get("groups?$select=id,displayName,description,groupTypes&$top=999", token)
-    return data.get("value", [])
+    return graph_get_all("groups?$select=id,displayName,description,groupTypes&$top=999", token)
 
 def list_service_principals(token: str) -> list[dict]:
-    data = graph_get("servicePrincipals?$select=id,displayName,appId,servicePrincipalType,appRoles&$top=100", token)
-    return data.get("value", [])
+    return graph_get_all("servicePrincipals?$select=id,displayName,appId,servicePrincipalType,appRoles&$top=100", token)
 
 def list_apps(token: str) -> list[dict]:
-    data = graph_get("applications?$select=id,displayName,appId,passwordCredentials,keyCredentials&$top=100", token)
-    return data.get("value", [])
+    return graph_get_all("applications?$select=id,displayName,appId,passwordCredentials,keyCredentials&$top=100", token)
 
 def get_me(token: str) -> dict:
     return graph_get("me", token)
